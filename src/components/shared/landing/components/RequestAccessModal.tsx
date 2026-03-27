@@ -12,7 +12,12 @@ type RequestAccessModalProps = {
 export function RequestAccessModal({ onClose }: RequestAccessModalProps) {
   const [formData, setFormData] = useState<AccessFormData>(defaultFormData);
   const [errors, setErrors] = useState<AccessFormErrors>({});
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState("");
   const [submitted, setSubmitted] = useState(false);
+  const formEndpoint = (
+    process.env.NEXT_PUBLIC_ACCESS_ENDPOINT ?? "/api/request-access"
+  ).trim();
 
   useEffect(() => {
     document.body.style.overflow = "hidden";
@@ -54,14 +59,70 @@ export function RequestAccessModal({ onClose }: RequestAccessModalProps) {
     return Object.keys(nextErrors).length === 0;
   };
 
-  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
+  const updateField = (field: keyof AccessFormData, value: string) => {
+    setFormData((prev) => ({ ...prev, [field]: value }));
+    if (submitError) {
+      setSubmitError("");
+    }
+  };
+
+  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!validate()) {
       return;
     }
 
-    console.log("Access request submitted:", formData);
-    setSubmitted(true);
+    if (isSubmitting) {
+      return;
+    }
+
+    setIsSubmitting(true);
+    setSubmitError("");
+
+    try {
+      const response = await fetch(formEndpoint, {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          fullName: formData.fullName.trim(),
+          organization: formData.organization.trim(),
+          role: formData.role.trim(),
+          email: formData.email.trim(),
+          useCase: formData.useCase.trim(),
+        }),
+      });
+
+      if (!response.ok) {
+        let apiError = `Submission failed with status ${response.status}`;
+
+        try {
+          const body = (await response.json()) as { error?: string };
+          if (body.error) {
+            apiError = body.error;
+          }
+        } catch {
+          // Keep fallback error when response body is not JSON.
+        }
+
+        throw new Error(apiError);
+      }
+
+      setSubmitted(true);
+      setFormData(defaultFormData);
+      setErrors({});
+    } catch (error) {
+      console.error("Request access submission error:", error);
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Unable to submit request right now.";
+      setSubmitError(message);
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const inputClassName =
@@ -148,7 +209,7 @@ export function RequestAccessModal({ onClose }: RequestAccessModalProps) {
                       placeholder="Jane Smith"
                       value={formData.fullName}
                       onChange={(event) =>
-                        setFormData({ ...formData, fullName: event.target.value })
+                        updateField("fullName", event.target.value)
                       }
                     />
                     {errors.fullName ? (
@@ -163,10 +224,7 @@ export function RequestAccessModal({ onClose }: RequestAccessModalProps) {
                       placeholder="Ministry of Agriculture"
                       value={formData.organization}
                       onChange={(event) =>
-                        setFormData({
-                          ...formData,
-                          organization: event.target.value,
-                        })
+                        updateField("organization", event.target.value)
                       }
                     />
                     {errors.organization ? (
@@ -183,7 +241,7 @@ export function RequestAccessModal({ onClose }: RequestAccessModalProps) {
                       placeholder="Director of Programs"
                       value={formData.role}
                       onChange={(event) =>
-                        setFormData({ ...formData, role: event.target.value })
+                        updateField("role", event.target.value)
                       }
                     />
                     {errors.role ? (
@@ -199,7 +257,7 @@ export function RequestAccessModal({ onClose }: RequestAccessModalProps) {
                       placeholder="jane@example.org"
                       value={formData.email}
                       onChange={(event) =>
-                        setFormData({ ...formData, email: event.target.value })
+                        updateField("email", event.target.value)
                       }
                     />
                     {errors.email ? (
@@ -216,7 +274,7 @@ export function RequestAccessModal({ onClose }: RequestAccessModalProps) {
                     placeholder="Describe how you plan to use SoilSynth..."
                     value={formData.useCase}
                     onChange={(event) =>
-                      setFormData({ ...formData, useCase: event.target.value })
+                      updateField("useCase", event.target.value)
                     }
                   />
                   {errors.useCase ? (
@@ -224,11 +282,16 @@ export function RequestAccessModal({ onClose }: RequestAccessModalProps) {
                   ) : null}
                 </div>
 
+                {submitError ? (
+                  <p className="text-sm text-red-600">{submitError}</p>
+                ) : null}
+
                 <button
                   type="submit"
-                  className="w-full bg-[#1F7A63] py-4 text-sm font-semibold text-white transition-all hover:bg-[#1a6a55] active:scale-[0.99]"
+                  disabled={isSubmitting}
+                  className="w-full bg-[#1F7A63] py-4 text-sm font-semibold text-white transition-all hover:bg-[#1a6a55] active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-70"
                 >
-                  Submit Request
+                  {isSubmitting ? "Submitting..." : "Submit Request"}
                 </button>
               </form>
             </>
