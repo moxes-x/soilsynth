@@ -18,6 +18,12 @@ export function LandingFooter() {
           </span>
         </div>
         <div className="flex items-center gap-6">
+          <a
+            href="mailto:partnerships@soilsynth.com"
+            className="transition-colors hover:text-[#111111]/70"
+          >
+            partnerships@soilsynth.com
+          </a>
           <Link href="/privacy" className="transition-colors hover:text-[#111111]/70">
             Privacy
           </Link>
