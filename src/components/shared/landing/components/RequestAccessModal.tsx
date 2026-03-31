@@ -99,9 +99,21 @@ export function RequestAccessModal({ onClose }: RequestAccessModalProps) {
         let apiError = `Submission failed with status ${response.status}`;
 
         try {
-          const body = (await response.json()) as { error?: string };
+          const body = (await response.json()) as {
+            error?: string;
+            errorCode?: string;
+            requestId?: string;
+          };
           if (body.error) {
             apiError = body.error;
+            if (body.requestId) {
+              apiError = `${body.error} (ref: ${body.requestId})`;
+            }
+            console.error("Request access API failure details:", {
+              errorCode: body.errorCode ?? "UNKNOWN",
+              requestId: body.requestId ?? "N/A",
+              status: response.status,
+            });
           }
         } catch {
           // Keep fallback error when response body is not JSON.

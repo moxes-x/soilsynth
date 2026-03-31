@@ -12,6 +12,41 @@ type AccessPayload = {
 };
 
 type ParsedBody = Record<string, FormDataEntryValue | unknown>;
+type MailConfig = {
+  accessFromEmail?: string;
+  accessToEmail?: string;
+  awsRegion?: string;
+  emailPassword?: string;
+  emailPort?: string;
+  emailSecure?: string;
+  emailServer?: string;
+  emailUser?: string;
+  mailHost?: string;
+  mailPass?: string;
+  mailPort?: string;
+  mailSecure?: string;
+  mailUser?: string;
+  sesSmtpHost?: string;
+  sesSmtpPass?: string;
+  sesSmtpUser?: string;
+  smtpConnectionTimeoutMs?: string;
+  smtpGreetingTimeoutMs?: string;
+  smtpHost?: string;
+  smtpPass?: string;
+  smtpPassword?: string;
+  smtpPort?: string;
+  smtpSecure?: string;
+  smtpSocketTimeoutMs?: string;
+  smtpUser?: string;
+  smtpUsername?: string;
+};
+type MailErrorCode =
+  | "MAIL_AUTH_FAILED"
+  | "MAIL_CONFIG_MISSING"
+  | "MAIL_CONNECTION_FAILED"
+  | "MAIL_SEND_FAILED"
+  | "MAIL_TIMEOUT"
+  | "MAIL_TLS_FAILED";
 
 function normalizeString(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
@@ -102,7 +137,7 @@ function normalizedEnv(value: string | undefined): string | undefined {
   return trimmed ? trimmed : undefined;
 }
 
-function readMailConfig() {
+function readMailConfig(): MailConfig {
   return {
     accessFromEmail:
       normalizedEnv(process.env.ACCESS_FROM_EMAIL) ??
@@ -110,26 +145,66 @@ function readMailConfig() {
     accessToEmail:
       normalizedEnv(process.env.ACCESS_TO_EMAIL) ??
       normalizedEnv(process.env.CONTACT_TO_EMAIL),
+    awsRegion:
+      normalizedEnv(process.env.AWS_REGION) ??
+      normalizedEnv(process.env.AWS_DEFAULT_REGION),
     emailPassword: normalizedEnv(process.env.EMAIL_PASSWORD),
     emailPort: normalizedEnv(process.env.EMAIL_PORT),
     emailSecure: normalizedEnv(process.env.EMAIL_SECURE),
     emailServer: normalizedEnv(process.env.EMAIL_SERVER),
     emailUser: normalizedEnv(process.env.EMAIL_USER),
+    mailHost: normalizedEnv(process.env.MAIL_HOST),
+    mailPass:
+      normalizedEnv(process.env.MAIL_PASS) ??
+      normalizedEnv(process.env.MAIL_PASSWORD),
+    mailPort: normalizedEnv(process.env.MAIL_PORT),
+    mailSecure: normalizedEnv(process.env.MAIL_SECURE),
+    mailUser: normalizedEnv(process.env.MAIL_USER),
+    sesSmtpHost: normalizedEnv(process.env.SES_SMTP_HOST),
+    sesSmtpPass:
+      normalizedEnv(process.env.SES_SMTP_PASS) ??
+      normalizedEnv(process.env.SES_SMTP_PASSWORD),
+    sesSmtpUser:
+      normalizedEnv(process.env.SES_SMTP_USER) ??
+      normalizedEnv(process.env.SES_SMTP_USERNAME),
+    smtpConnectionTimeoutMs: normalizedEnv(
+      process.env.SMTP_CONNECTION_TIMEOUT_MS,
+    ),
+    smtpGreetingTimeoutMs: normalizedEnv(process.env.SMTP_GREETING_TIMEOUT_MS),
     smtpHost: normalizedEnv(process.env.SMTP_HOST),
     smtpPass: normalizedEnv(process.env.SMTP_PASS),
+    smtpPassword: normalizedEnv(process.env.SMTP_PASSWORD),
     smtpPort: normalizedEnv(process.env.SMTP_PORT),
     smtpSecure: normalizedEnv(process.env.SMTP_SECURE),
+    smtpSocketTimeoutMs: normalizedEnv(process.env.SMTP_SOCKET_TIMEOUT_MS),
     smtpUser: normalizedEnv(process.env.SMTP_USER),
+    smtpUsername: normalizedEnv(process.env.SMTP_USERNAME),
   };
 }
 
-function parseSmtpPort(rawPort: string): number {
-  const port = Number.parseInt(rawPort, 10);
-  if (!Number.isInteger(port) || port <= 0) {
-    throw new Error("SMTP_PORT or EMAIL_PORT must be a valid positive integer");
+function parsePositiveInteger(rawValue: string, fieldName: string): number {
+  const parsed = Number.parseInt(rawValue, 10);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error(`${fieldName} must be a valid positive integer`);
   }
 
-  return port;
+  return parsed;
+}
+
+function parseSmtpPort(rawPort: string): number {
+  return parsePositiveInteger(rawPort, "SMTP_PORT or EMAIL_PORT");
+}
+
+function parseTimeoutMs(
+  rawValue: string | undefined,
+  fieldName: string,
+  fallbackMs: number,
+): number {
+  if (!rawValue) {
+    return fallbackMs;
+  }
+
+  return parsePositiveInteger(rawValue, fieldName);
 }
 
 function parseSmtpSecure(rawValue: string | undefined, port: number): boolean {
@@ -137,7 +212,113 @@ function parseSmtpSecure(rawValue: string | undefined, port: number): boolean {
     return port === 465;
   }
 
-  return rawValue.trim().toLowerCase() === "true";
+  const normalized = rawValue.trim().toLowerCase();
+  return normalized === "true" || normalized === "1" || normalized === "yes";
+}
+
+function buildSesHostFromRegion(region: string | undefined): string | undefined {
+  return region ? `email-smtp.${region}.amazonaws.com` : undefined;
+}
+
+function classifyMailError(error: unknown): MailErrorCode {
+  if (
+    error instanceof Error &&
+    error.message.startsWith("Missing required environment variable:")
+  ) {
+    return "MAIL_CONFIG_MISSING";
+  }
+
+  const code =
+    typeof (error as { code?: unknown })?.code === "string"
+      ? (error as { code: string }).code
+      : "";
+
+  if (code === "EAUTH") {
+    return "MAIL_AUTH_FAILED";
+  }
+  if (code === "ETIMEDOUT") {
+    return "MAIL_TIMEOUT";
+  }
+  if (
+    code === "ESOCKET" ||
+    code === "ECONNECTION" ||
+    code === "ECONNREFUSED" ||
+    code === "ECONNRESET" ||
+    code === "ENETUNREACH" ||
+    code === "ENOTFOUND" ||
+    code === "EHOSTUNREACH"
+  ) {
+    return "MAIL_CONNECTION_FAILED";
+  }
+  if (error instanceof Error && /tls|ssl|certificate/i.test(error.message)) {
+    return "MAIL_TLS_FAILED";
+  }
+
+  return "MAIL_SEND_FAILED";
+}
+
+function createRequestId(): string {
+  const randomPart = Math.random().toString(36).slice(2, 8);
+  return `${Date.now().toString(36)}-${randomPart}`;
+}
+
+function configSnapshot(config: MailConfig) {
+  const host =
+    config.smtpHost ??
+    config.mailHost ??
+    config.emailServer ??
+    config.sesSmtpHost ??
+    buildSesHostFromRegion(config.awsRegion);
+  const user =
+    config.smtpUser ??
+    config.smtpUsername ??
+    config.mailUser ??
+    config.emailUser ??
+    config.sesSmtpUser;
+  const pass =
+    config.smtpPass ??
+    config.smtpPassword ??
+    config.mailPass ??
+    config.emailPassword ??
+    config.sesSmtpPass;
+
+  return {
+    accessFromEmailSet: Boolean(config.accessFromEmail),
+    accessToEmailSet: Boolean(config.accessToEmail),
+    awsRegion: config.awsRegion ?? null,
+    emailAliasSet: Boolean(
+      config.emailServer ||
+        config.emailUser ||
+        config.emailPassword ||
+        config.emailPort ||
+        config.emailSecure,
+    ),
+    host: host ?? null,
+    mailAliasSet: Boolean(
+      config.mailHost ||
+        config.mailUser ||
+        config.mailPass ||
+        config.mailPort ||
+        config.mailSecure,
+    ),
+    portRaw: config.smtpPort ?? config.mailPort ?? config.emailPort ?? "587",
+    secureRaw:
+      config.smtpSecure ?? config.mailSecure ?? config.emailSecure ?? null,
+    sesAliasSet: Boolean(
+      config.sesSmtpHost || config.sesSmtpUser || config.sesSmtpPass,
+    ),
+    smtpAliasSet: Boolean(
+      config.smtpHost ||
+        config.smtpUser ||
+        config.smtpUsername ||
+        config.smtpPass ||
+        config.smtpPassword ||
+        config.smtpPort ||
+        config.smtpSecure,
+    ),
+    userSet: Boolean(user),
+    passSet: Boolean(pass),
+  };
 }
 
 function buildMessageText(payload: AccessPayload, origin: string) {
@@ -236,38 +417,76 @@ function buildMessageHtml(payload: AccessPayload, origin: string): string {
 
 async function sendAccessEmail(payload: AccessPayload, origin: string) {
   const config = readMailConfig();
-  const host = config.smtpHost ?? config.emailServer;
+  const host =
+    config.smtpHost ??
+    config.mailHost ??
+    config.emailServer ??
+    config.sesSmtpHost ??
+    buildSesHostFromRegion(config.awsRegion);
   if (!host) {
     throw new Error(
-      "Missing required environment variable: SMTP_HOST or EMAIL_SERVER",
+      "Missing required environment variable: SMTP_HOST or EMAIL_SERVER (or MAIL_HOST / SES_SMTP_HOST / AWS_REGION)",
     );
   }
 
-  const user = config.smtpUser ?? config.emailUser;
+  const user =
+    config.smtpUser ??
+    config.smtpUsername ??
+    config.mailUser ??
+    config.emailUser ??
+    config.sesSmtpUser;
   if (!user) {
     throw new Error(
-      "Missing required environment variable: SMTP_USER or EMAIL_USER",
+      "Missing required environment variable: SMTP_USER or EMAIL_USER (or SMTP_USERNAME / MAIL_USER / SES_SMTP_USER)",
     );
   }
 
-  const pass = config.smtpPass ?? config.emailPassword;
+  const pass =
+    config.smtpPass ??
+    config.smtpPassword ??
+    config.mailPass ??
+    config.emailPassword ??
+    config.sesSmtpPass;
   if (!pass) {
     throw new Error(
-      "Missing required environment variable: SMTP_PASS or EMAIL_PASSWORD",
+      "Missing required environment variable: SMTP_PASS or EMAIL_PASSWORD (or SMTP_PASSWORD / MAIL_PASS / SES_SMTP_PASS)",
     );
   }
 
-  const port = parseSmtpPort(config.smtpPort ?? config.emailPort ?? "587");
-  const secure = parseSmtpSecure(config.smtpSecure ?? config.emailSecure, port);
+  const port = parseSmtpPort(
+    config.smtpPort ?? config.mailPort ?? config.emailPort ?? "587",
+  );
+  const secure = parseSmtpSecure(
+    config.smtpSecure ?? config.mailSecure ?? config.emailSecure,
+    port,
+  );
+  const connectionTimeout = parseTimeoutMs(
+    config.smtpConnectionTimeoutMs,
+    "SMTP_CONNECTION_TIMEOUT_MS",
+    10_000,
+  );
+  const greetingTimeout = parseTimeoutMs(
+    config.smtpGreetingTimeoutMs,
+    "SMTP_GREETING_TIMEOUT_MS",
+    10_000,
+  );
+  const socketTimeout = parseTimeoutMs(
+    config.smtpSocketTimeoutMs,
+    "SMTP_SOCKET_TIMEOUT_MS",
+    20_000,
+  );
 
   const to = config.accessToEmail ?? user;
-  const from = config.accessFromEmail ?? config.emailUser ?? user;
+  const from = config.accessFromEmail ?? config.emailUser ?? config.mailUser ?? user;
 
   const transporter = nodemailer.createTransport({
     auth: { pass, user },
+    connectionTimeout,
+    greetingTimeout,
     host,
     port,
     secure,
+    socketTimeout,
   });
 
   await transporter.sendMail({
@@ -286,6 +505,7 @@ async function methodNotAllowed() {
 
 export async function POST(request: Request) {
   let payload: AccessPayload;
+  const requestId = createRequestId();
 
   try {
     payload = await parseBody(request);
@@ -305,14 +525,25 @@ export async function POST(request: Request) {
     await sendAccessEmail(payload, requestOrigin(request));
     return NextResponse.json({ ok: true, message: "Request received" });
   } catch (error) {
-    console.error("Request access email error:", error);
-    const isDevelopment = process.env.NODE_ENV !== "production";
+    const mailConfig = readMailConfig();
+    const errorCode = classifyMailError(error);
     const errorMessage =
-      error instanceof Error ? error.message : "Unknown error";
+      error instanceof Error ? error.message : "Unknown mail delivery error";
+
+    console.error("Request access email error:", {
+      errorCode,
+      errorMessage,
+      requestId,
+      snapshot: configSnapshot(mailConfig),
+    });
+
+    const isDevelopment = process.env.NODE_ENV !== "production";
 
     return NextResponse.json(
       {
         error: "Unable to send request right now. Please try again shortly.",
+        errorCode,
+        requestId,
         ...(isDevelopment ? { debug: { errorMessage } } : {}),
       },
       { status: 500 },
